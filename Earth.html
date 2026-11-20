@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Earth</title>
+
+    <!-- Vertex Shader -->
+    <script id="vertex-shader" type="x-shader/x-vertex">
+        attribute vec4 vPosition;
+        uniform vec2 uRotation;
+
+        varying float brightness;
+        varying mediump float heightKm;
+
+        void main()
+        {
+            float yaw = uRotation.x;
+            float pitch = uRotation.y;
+
+            vec3 p = vPosition.xyz;
+
+            heightKm = (length(p) / 0.75 - 1.0) * 6371.0 / 30.0;
+
+            //rotation to y
+            vec3 turned = vec3(
+                cos(yaw) * p.x + sin(yaw) * p.z,
+                p.y,
+                -sin(yaw) * p.x + cos(yaw) * p.z
+            );
+
+            //rotation to x
+             vec3 rotated = vec3(
+                turned.x,
+                cos(pitch) * turned.y - sin(pitch) * turned.z,
+                sin(pitch) * turned.y + cos(pitch) * turned.z
+            );
+
+            gl_Position = vec4(rotated, 1.0);
+
+            vec3 normal = normalize(rotated);
+            vec3 lightDir = normalize(vec3(-1.0, 1.0, -1.0));
+            brightness = 0.3 + 0.7 * max(dot(normal, lightDir), 0.0);
+        }
+    </script>
+
+    <!-- Fragment Shader -->
+    <script id="fragment-shader" type="x-shader/x-fragment">
+        precision mediump float;
+
+        varying mediump float brightness;
+        varying mediump float heightKm;
+
+        void main()
+        {
+            vec3 color;
+
+            if (heightKm < 0.0){
+                float depth = clamp(-heightKm / 5.0, 0.0, 1.0);
+                color = mix(vec3(0.18, 0.65, 0.85),
+                            vec3(0.02, 0.08, 0.28), depth);
+            } 
+            else {
+                vec3 grass = vec3(0.28, 0.57, 0.25);
+                vec3 rock = vec3(0.55, 0.39, 0.25);
+                vec3 snow = vec3(1.0, 1.0, 1.0);
+
+                color = mix(grass, rock, smoothstep(0.8, 1.8, heightKm));
+
+                color = mix(color, snow, smoothstep(2.5, 3.0, heightKm));
+            }
+
+            gl_FragColor = vec4(color * brightness, 1.0);
+        }
+    </script>
+
+    <script src="Common/webgl-utils.js"></script>
+    <script src="Common/initShaders.js"></script>
+    <script src="Common/MV.js"></script>
+</head>
+
+<body>
+    <h2>Earth</h2>
+
+    <p>
+        <label>ETOPO1
+            <input type="file" id="height-file" accept=".csv">
+        </label>
+    </p>
+    <canvas id="gl-canvas" width="512" height="512">
+    </canvas>
+
+<script>
+    const canvas = document.getElementById("gl-canvas");
+    const gl = canvas.getContext("webgl");
+
+    if (!gl){
+        throw new Error("WebGL 사용 불가");
+    }
+
+    const program = initShaders(gl, "vertex-shader", "fragment-shader");
+    gl.useProgram(program);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.enable(gl.DEPTH_TEST);
+
+    const heights = new Map();
+
+    function spherePoint(lat, lon){
+        const latDeg = Math.round(lat * 180 / Math.PI);
+        let lonDeg = Math.round(lon * 180 / Math.PI);
+
+        if (lonDeg > 180) lonDeg -= 360;
+
+        const height = heights.get(`${latDeg},${lonDeg}`) ?? 0;
+        const r = 0.75 * (1 + 30 * height / 6371000);
+
+        return vec3(
+            r*Math.cos(lat)*Math.cos(lon),
+            r*Math.sin(lat),
+            r*Math.cos(lat)*Math.sin(lon)
+        );
+    }
+
+    const points = [];
+    const latBands = 60;
+    const lonBands = 120;
+
+    function buildSphere(){
+        points.length = 0;
+            for (let i=0; i<latBands; i++){
+                const lat1 = -Math.PI/2 + Math.PI*i/latBands;
+                const lat2 = -Math.PI/2 + Math.PI * (i+1)/latBands;
+
+            for (let j=0; j<lonBands; j++){
+                const lon1 = 2*Math.PI * j/lonBands;
+                const lon2 = 2*Math.PI * (j+1)/lonBands;
+
+                const a = spherePoint(lat1, lon1);
+                const b = spherePoint(lat1, lon2);
+                const c = spherePoint(lat2, lon1);
+                const d = spherePoint(lat2, lon2);
+
+                points.push(a, b, c);
+                points.push(b, d, c);
+            }
+        }
+    }
+
+    buildSphere();
+
+    const buffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, flatten(points), gl.STATIC_DRAW);
+
+    const vPosition = gl.getAttribLocation(program, "vPosition");
+    gl.vertexAttribPointer(vPosition, 3, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(vPosition);
+
+    const uColor = gl.getUniformLocation(program, "uColor");
+    gl.uniform4f(uColor, 0.2, 0.55, 1.0, 1.0);
+
+    const uRotation = gl.getUniformLocation(program, "uRotation");
+    let yaw = 0;
+    let pitch = 0;
+    let lastX = 0;
+    let lastY = 0;
+    let activePointer = null;
+
+    function drawEarth(){
+        gl.uniform2f(uRotation, yaw, pitch);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        gl.drawArrays(gl.TRIANGLES, 0, points.length);
+    }
+    
+    canvas.style.touchAction = "none";
+    canvas.style.cursor = "grab";
+
+    canvas.addEventListener("pointerdown", function(event){
+        if (event.button !==0 || activePointer !==null) return;
+
+        activePointer = event.pointerId;
+        lastX = event.clientX;
+        lastY = event.clientY;
+        canvas.setPointerCapture(event.pointerId);
+        canvas.style.cursor = "grabbing";
+    })
+    canvas.addEventListener("pointermove", function(event){
+        if (event.pointerId !== activePointer) return;
+
+        const dx = event.clientX - lastX;
+        const dy = event.clientY - lastY;
+
+        yaw -= dx/canvas.clientWidth * 2 * Math.PI;
+        pitch -= dy/canvas.clientHeight * 2 * Math.PI;
+
+        lastX = event.clientX;
+        lastY = event.clientY;
+        drawEarth();
+    });
+
+    function stopDragging(event){
+        if (event.pointerId !== activePointer) return;
+        activePointer = null;
+        canvas.style.cursor = "grab";
+    }
+
+    canvas.addEventListener("pointerup", stopDragging);
+    canvas.addEventListener("pointercancel", stopDragging);
+    canvas.addEventListener("lostpointercapture", stopDragging);
+
+    gl.clearColor(0.05, 0.05, 0.08, 1.0);
+    drawEarth();
+
+    document.getElementById("height-file").addEventListener("change", async function() {
+    const file = this.files[0];
+    if (!file) return;
+    
+    const text = await file.text();
+    const rows = text.trim().split(/\r?\n/);
+    heights.clear();
+
+    for(const row of rows.slice(2)){
+        const [lat, lon, height] = row.split(",").map(Number);
+        if (Number.isFinite(lat) && Number.isFinite(lon)&& Number.isFinite(height)){
+            heights.set(`${Math.round(lat)},${Math.round(lon)}`, height);
+        }
+    }
+
+    buildSphere();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, flatten(points), gl.STATIC_DRAW);
+    drawEarth();
+    })
+</script>
+</body>
+</html>
