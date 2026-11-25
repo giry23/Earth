@@ -81,11 +81,6 @@
 <body>
     <h2>Earth</h2>
 
-    <p>
-        <label>ETOPO1
-            <input type="file" id="height-file" accept=".csv">
-        </label>
-    </p>
     <canvas id="gl-canvas" width="512" height="512">
     </canvas>
 
@@ -137,7 +132,7 @@
                 const a = spherePoint(lat1, lon1);
                 const b = spherePoint(lat1, lon2);
                 const c = spherePoint(lat2, lon1);
-                const d = spherePoint(lat2, lon2);
+                const d = spherePoint(lat2, lon2); 
 
                 points.push(a, b, c);
                 points.push(b, d, c);
@@ -208,13 +203,15 @@
     canvas.addEventListener("lostpointercapture", stopDragging);
 
     gl.clearColor(0.05, 0.05, 0.08, 1.0);
-    drawEarth();
 
-    document.getElementById("height-file").addEventListener("change", async function() {
-    const file = this.files[0];
-    if (!file) return;
+    async function loadEarth() {
     
-    const text = await file.text();
+    const response = await fetch("./etopo1_3deg.csv");
+    if (!response.ok){
+        throw new Error(`csv 불러오기 실패. HTTP ${response.status}`);
+    }
+    
+    const text = await response.text();
     const rows = text.trim().split(/\r?\n/);
     heights.clear();
 
@@ -229,7 +226,13 @@
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
     gl.bufferData(gl.ARRAY_BUFFER, flatten(points), gl.STATIC_DRAW);
     drawEarth();
-    })
+    }
+
+    loadEarth().catch(function(error){
+        console.error(error);
+        canvas.insertAdjacentText("afterend", "지형 데이터 불러오기 실패");
+    });
 </script>
 </body>
+32242996 이기령
 </html>
